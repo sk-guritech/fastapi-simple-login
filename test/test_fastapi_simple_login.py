@@ -62,6 +62,10 @@ def test_logout():
     res = requests.post('http://127.0.0.1:8000/logout', headers={'Authorization': 'Bearer ' + access_token})
     assert res.status_code == 200
 
+    res = requests.post('http://127.0.0.1:8000/logout', headers={'Authorization': 'Bearer ' + access_token})
+    assert res.status_code == 401
+    assert res.headers['WWW-Authenticate'] == 'Bearer error="invalid_token"'
+
 
 def test_logout_with_invalid_token():
     res = requests.post('http://127.0.0.1:8000/login', data={'username': 'johndoe', 'password': 'secret'})
