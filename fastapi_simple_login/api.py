@@ -138,7 +138,11 @@ class SimpleLoginAPI():
             raise RedisSessionNotSet
 
         ulid = claims.sub
-        if cls.__redis_session.get(f'{ulid}:{grant}_token').decode('utf-8') != claims.jti:
+        jti_in_redis = cls.__redis_session.get(f'{ulid}:{grant}_token')
+        if jti_in_redis is None:
+            raise InvalidToken
+
+        if jti_in_redis.decode('utf-8') != claims.jti:
             raise InvalidToken
 
         return ulid
