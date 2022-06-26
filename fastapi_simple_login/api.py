@@ -32,7 +32,7 @@ from .exception import RequiredColumnsNotDefined
 _api_router = InferringRouter()
 
 
-class JwtTokenClaims(BaseModel):
+class _JwtTokenClaims(BaseModel):
     sub: str
     exp: datetime
     jti: str
@@ -41,6 +41,9 @@ class JwtTokenClaims(BaseModel):
 
 @cbv(_api_router)
 class SimpleLoginAPI():
+    '''Provides APIs and Method for authorization and authentication.
+    '''
+
     __SECRET_KEY = secrets.token_hex(64)
     __JWT_SIGNING_ALGORITHM = 'HS256'
     __ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -51,13 +54,24 @@ class SimpleLoginAPI():
     __user_model = None
 
     @classmethod
-    def set_config(cls, redis_session=None, database_session_maker=None, user_model=None):
+    def set_config(
+        cls,
+        redis_session: Any | None = None,
+        database_session_maker: Any | None = None,
+        user_model: Any | None = None,
+        access_token_expire_minutes: int | None = None,
+        refresh_token_expire_minutes: int | None = None,
+    ):
         if redis_session is not None:
             cls.__redis_session = redis_session
         if database_session_maker is not None:
             cls.__database_session_maker = database_session_maker
         if user_model is not None:
             cls.__user_model = user_model
+        if access_token_expire_minutes is not None:
+            cls.__ACCESS_TOKEN_EXPIRE_MINUTES = access_token_expire_minutes
+        if refresh_token_expire_minutes is not None:
+            cls.__REFRESH_TOKEN_EXPIRE_MINUTES = refresh_token_expire_minutes
 
     @classmethod
     def validate_access_token(cls, encoded_jwt: str | Any = Depends(OAuth2PasswordBearer(tokenUrl='login'))) -> str:
@@ -83,8 +97,8 @@ class SimpleLoginAPI():
         return _api_router
 
     @classmethod
-    def __generate_token(cls, ulid, grant, expire_minutes):
-        claims = JwtTokenClaims(
+    def __generate_token(cls, ulid: str, grant: str, expire_minutes: int) -> tuple[Any, str]:
+        claims = _JwtTokenClaims(
             sub=ulid,
             exp=datetime.utcnow() + timedelta(minutes=expire_minutes),
             jti=f'{ulid}:{uuid.uuid4()}',
@@ -96,11 +110,11 @@ class SimpleLoginAPI():
         return encoded_jwt, claims.jti
 
     @classmethod
-    def __generate_access_token(cls, ulid: str):
+    def __generate_access_token(cls, ulid: str) -> tuple[Any, str]:
         return cls.__generate_token(ulid, 'access', cls.__ACCESS_TOKEN_EXPIRE_MINUTES)
 
     @classmethod
-    def __generate_refresh_token(cls, ulid: str):
+    def __generate_refresh_token(cls, ulid: str) -> tuple[Any, str]:
         return cls.__generate_token(ulid, 'refresh', cls.__REFRESH_TOKEN_EXPIRE_MINUTES)
 
     @classmethod
@@ -110,7 +124,7 @@ class SimpleLoginAPI():
 
         with cls.__database_session_maker() as db_session:
             try:
-                user_record = db_session.query(cls.__user_model).filter(cls.__user_model.name == username).one()
+                user_record = db_session.query(cls.__user_model).filter(cls.__user_model.name == username).one()  # type: ignore
             except NoResultFound:
                 raise InvalidRequest
 
@@ -120,9 +134,9 @@ class SimpleLoginAPI():
         raise InvalidRequest
 
     @classmethod
-    def __validate_token(cls, grant, encoded_jwt) -> str:
+    def __validate_token(cls, grant: str, encoded_jwt: str) -> str:
         try:
-            claims = JwtTokenClaims(
+            claims = _JwtTokenClaims(
                 **jwt.decode(
                     encoded_jwt, cls.__SECRET_KEY,
                     algorithms=cls.__JWT_SIGNING_ALGORITHM,
@@ -148,11 +162,11 @@ class SimpleLoginAPI():
         return ulid
 
     @classmethod
-    def __validate_access_token(cls, encoded_jwt) -> str:
+    def __validate_access_token(cls, encoded_jwt: str) -> str:
         return cls.__validate_token('access', encoded_jwt)
 
     @classmethod
-    def __validate_refresh_token(cls, encoded_jwt) -> str:
+    def __validate_refresh_token(cls, encoded_jwt: str) -> str:
         return cls.__validate_token('refresh', encoded_jwt)
 
     @_api_router.post('/login')
@@ -187,7 +201,7 @@ class SimpleLoginAPI():
         }
 
     @_api_router.post('/logout')
-    async def __logout(self, encoded_jwt: str = Depends(OAuth2PasswordBearer(tokenUrl='login'))) -> dict:
+    async def __logout(self, encoded_jwt: str | Any = Depends(OAuth2PasswordBearer(tokenUrl='login'))) -> dict:
         ulid = self.__validate_access_token(encoded_jwt)
 
         self.__redis_session.delete(f'{ulid}:access_token', f'{ulid}:refresh_token')  # type: ignore
