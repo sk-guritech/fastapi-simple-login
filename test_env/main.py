@@ -21,10 +21,7 @@ redis = Redis('redis', 6379, 0)
 engine = create_engine('mysql://user:password@db/database')
 SessionMaker = sessionmaker(engine)
 
-SimpleLoginAPI.set_config(redis_session=redis, database_session_maker=SessionMaker, user_model=UserModel)
-SimpleLoginAPI.set_exception_handlers(app)
-
-app.include_router(SimpleLoginAPI.get_api_router())
+SimpleLoginAPI.deploy(app, redis, SessionMaker, UserModel)
 
 
 @app.get('/')

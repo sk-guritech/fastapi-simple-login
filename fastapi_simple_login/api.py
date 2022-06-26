@@ -6,7 +6,6 @@ from datetime import datetime
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import FastAPI
 from fastapi.security import OAuth2PasswordBearer
@@ -54,20 +53,66 @@ class SimpleLoginAPI():
     __user_model = None
 
     @classmethod
-    def set_config(
+    def deploy(cls, app: FastAPI, redis_session: Any, database_session_maker: Any, user_model: Any, router_settings: dict = {}):
+        '''Deploys the APIs to the app.
+
+        Args:
+            app (FastAPI): FastAPI instance.
+            redis_session (Any): Redis session for managing token sessions.
+            database_session_maker (Any): Session maker for DB that is
+                necessary for fetching user record.
+            user_model (Any):SQLAlchemy model with the columns required to
+                use the features for authorization and authentication.
+            router_settings (dict, optional): FastAPI.include_router's arguments. Defaults to {}.
+        '''
+        cls.__set_exception_handlers(app)
+        cls.__redis_session = redis_session
+        cls.__database_session_maker = database_session_maker
+        cls.__user_model = user_model
+        app.include_router(_api_router, **router_settings)
+
+    @classmethod
+    def set_configs(
         cls,
         redis_session: Any | None = None,
         database_session_maker: Any | None = None,
         user_model: Any | None = None,
+        secret_key: str | None = None,
+        jwt_signing_algorithm: str | None = None,
         access_token_expire_minutes: int | None = None,
         refresh_token_expire_minutes: int | None = None,
     ):
+        '''Set API configs.
+            If you give an argument other than None, the setting will be reflected.
+
+        Args:
+            redis_session (Any | None, optional):Redis session for managing token
+                sessions. Defaults to None, but necessary.
+            database_session_maker (Any | None, optional): Session maker for DB
+                that is necessary for fetching user record. Defaults to None,
+                but necessary.
+            user_model (Any | None, optional): SQLAlchemy model with the columns
+                required to use the features for authorization and authentication.
+                Defaults to None, but necessary.
+            secret_key (str | None, optional): Secret key for signing. Defaults to
+                set automatically.
+            jwt_signing_algorithm (str | None, optional): Algorithm used to sign.
+                Defaults to HS256.
+            access_token_expire_minutes (int | None, optional): The period in minutes
+                during which the access token can be used. Defaults to 60.
+            refresh_token_expire_minutes (int | None, optional): The period in minutes
+                during which the refresh token can be used. Defaults to 7200.
+        '''
         if redis_session is not None:
             cls.__redis_session = redis_session
         if database_session_maker is not None:
             cls.__database_session_maker = database_session_maker
         if user_model is not None:
             cls.__user_model = user_model
+        if secret_key is not None:
+            cls.__SECRET_KEY = secret_key
+        if jwt_signing_algorithm is not None:
+            cls.__JWT_SIGNING_ALGORITHM = jwt_signing_algorithm
         if access_token_expire_minutes is not None:
             cls.__ACCESS_TOKEN_EXPIRE_MINUTES = access_token_expire_minutes
         if refresh_token_expire_minutes is not None:
@@ -75,10 +120,20 @@ class SimpleLoginAPI():
 
     @classmethod
     def validate_access_token(cls, encoded_jwt: str | Any = Depends(OAuth2PasswordBearer(tokenUrl='login'))) -> str:
+        '''Validates access_token and returns the user's ulid.
+            If the verification fails, the HTTP response according to the
+            verification content is returned.
+
+        Args:
+            encoded_jwt (str | Any, optional): Received JWT. Defaults to Depends(OAuth2PasswordBearer(tokenUrl='login')).
+
+        Returns:
+            str: Ulid of the user.
+        '''
         return cls.__validate_token('access', encoded_jwt)
 
     @staticmethod
-    def set_exception_handlers(app: FastAPI) -> None:
+    def __set_exception_handlers(app: FastAPI) -> None:
         exceptions = [
             DatabaseSessionMakerNotSet,
             RedisSessionNotSet,
@@ -91,10 +146,6 @@ class SimpleLoginAPI():
 
         for exception in exceptions:
             app.add_exception_handler(exception, exception.exception_handler)  # type: ignore
-
-    @staticmethod
-    def get_api_router() -> APIRouter:
-        return _api_router
 
     @classmethod
     def __generate_token(cls, ulid: str, grant: str, expire_minutes: int) -> tuple[Any, str]:
@@ -171,6 +222,17 @@ class SimpleLoginAPI():
 
     @_api_router.post('/login')
     async def __login(self, form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
+        '''Generates access token and refresh token.
+            If InvalidRequest exception is occured, returns HTTP_400_BAD_REQUEST.
+            If form_data is None, returns HTTP_422_UNPROCESSABLE_ENTITY.
+            If other exception is occured , retunrs HTTP_500_INTERNAL_SERVER_ERROR.
+
+        Args:
+            encoded_jwt (str | Any, optional): JWT. Defaults to Depends(OAuth2PasswordBearer(tokenUrl='login')).
+
+        Returns:
+            dict: API response.
+        '''
         username = form_data.username
         password = form_data.password
 
@@ -188,6 +250,18 @@ class SimpleLoginAPI():
 
     @_api_router.post('/refresh')
     async def __refresh(self, encoded_jwt: str | Any = Depends(OAuth2PasswordBearer(tokenUrl='login'))) -> dict:
+        '''Refreshes access token and refresh token.
+            If InvalidToken exception is occured , retunrs HTTP_401_UNAUTHORIZED.
+            If InsufficientScope exception is occured, retunrs HTTP_HTTP_403_FORBIDDEN.
+            If other exception is occured , retunrs HTTP_500_INTERNAL_SERVER_ERROR.
+
+        Args:
+            encoded_jwt (str | Any, optional): JWT. Defaults to Depends(OAuth2PasswordBearer(tokenUrl='login')).
+
+        Returns:
+            dict: API response.
+        '''
+
         ulid = self.__validate_refresh_token(encoded_jwt)
         access_token, access_token_jti = self.__generate_access_token(ulid)
         refresh_token, refresh_token_jti = self.__generate_refresh_token(ulid)
@@ -202,6 +276,17 @@ class SimpleLoginAPI():
 
     @_api_router.post('/logout')
     async def __logout(self, encoded_jwt: str | Any = Depends(OAuth2PasswordBearer(tokenUrl='login'))) -> dict:
+        '''Deletes session from the redis.
+            If InvalidToken exception is occured , retunrs HTTP_401_UNAUTHORIZED.
+            If InsufficientScope exception is occured, retunrs HTTP_HTTP_403_FORBIDDEN.
+            If other exception is occured , retunrs HTTP_500_INTERNAL_SERVER_ERROR.
+
+        Args:
+            encoded_jwt (str | Any, optional): JWT. Defaults to Depends(OAuth2PasswordBearer(tokenUrl='login')).
+
+        Returns:
+            dict: API response.
+        '''
         ulid = self.__validate_access_token(encoded_jwt)
 
         self.__redis_session.delete(f'{ulid}:access_token', f'{ulid}:refresh_token')  # type: ignore
